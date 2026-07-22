@@ -6,13 +6,18 @@ local PLAY_BOTTOM = 169                 -- default corridor bottom
 local TILE = 16                         -- terrain tile size (matches sprite grid)
 local GRID_ROWS = math.ceil(180 / TILE) -- terrain rows covering the playfield
 
--- Terrain tile types. A grid cell holds one of these ids (nil = open corridor).
--- Add `spr = <cell>` to any entry to draw art instead of the placeholder color.
-local TILE_TREE, TILE_STONE = 1, 2
-local TILES = {
-  [TILE_TREE]  = { color = gfx.COLOR_DARK_GREEN }, -- top wall (forest)
-  [TILE_STONE] = { color = gfx.COLOR_DARK_GRAY },  -- bottom wall (ground/rock)
+-- Terrain tiles: impassable scenery (trees, rocks, ...) dressing the walls.
+-- Top-down view — the open lane is ground (GROUND_COLOR background) and the walls
+-- are a *mix* of these tiles. They're interchangeable: all impassable, differing
+-- only in sprite/color, so collision ignores which one a cell is. Add entries or
+-- `spr = <cell>` freely. A `nil` grid cell = open ground (passable).
+local TERRAIN_TILES = {
+  { color = gfx.COLOR_DARK_GREEN },  -- tree
+  { color = gfx.COLOR_GREEN },       -- bush
+  { color = gfx.COLOR_DARK_GRAY },   -- rock
+  { color = gfx.COLOR_LIGHT_GRAY },  -- boulder
 }
+local GROUND_COLOR = gfx.COLOR_BLACK -- open lane you fly over (top-down background)
 
 local MEMBER_SIZE = 10
 local FORM_TIME = 0.6      -- seconds to glide between formations
@@ -142,11 +147,21 @@ local PATTERNS = {
 -- 1-based sprites.png index) to any entry to draw art instead of the rect.
 -- `hp` is hit points; omit it to make the entity indestructible (walls still
 -- stop bullets, they just don't take damage). `fire_rate` + `shots` (same shape
--- as CHAR_TYPES) make an enemy shoot; enemy bullets fly left toward the squad.
+-- as CHAR_TYPES) make an enemy shoot. A shot with fixed `vx`/`vy` fires that
+-- velocity (ambush enemies mirror it); a shot with `aim = true` instead points
+-- at the squad using `speed` (px/s) with a random `spread` (radians of jitter).
 local TYPES = {
   grunt  = { w = 12, h = 12, color = gfx.COLOR_RED, hp = 1 },
-  turret = { w = 16, h = 16, color = gfx.COLOR_ORANGE, hp = 3 },
   wall   = { w = 20, h = 20, color = gfx.COLOR_LIGHT_GRAY },
+  turret = {
+    w = 16,
+    h = 16,
+    color = gfx.COLOR_ORANGE,
+    hp = 3,
+    fire_rate = 2.0,
+    -- Aimed at the squad, ~20° of random spread — random but generally at you.
+    shots = { { aim = true, speed = 110, spread = 0.35, w = 4, h = 4, color = gfx.COLOR_RED } },
+  },
   gunner = {
     w = 12,
     h = 12,
@@ -178,11 +193,19 @@ local function terrain_at(profile, wx)
   return profile[n].ceiling, profile[n].floor
 end
 
+-- Deterministic pseudo-random terrain tile for a cell, so both walls get a mix.
+-- Placeholder scatter; swap for authored data or nicer noise later. The col*row
+-- term breaks up linear striping. No RNG state, no bitwise (loveify-safe).
+local function terrain_tile_at(col, row)
+  local h = col * 73 + row * 179 + col * row * 13
+  return h % #TERRAIN_TILES + 1
+end
+
 -- Bake the smooth keyframe corridor into a tile grid. Each column is filled with
--- tree tiles from the top down to the (quantized) ceiling line and stone tiles
+-- a mix of terrain tiles from the top down to the (quantized) ceiling line and
 -- from the floor line down. Per-column ceiling/floor pixels are cached so
 -- collision reads the same blocky bounds the tiles are drawn at.
---   lvl.map[col][row] = tile id (nil = open corridor); col/row are 0-based
+--   lvl.map[col][row] = tile id (nil = open ground); col/row are 0-based
 --   lvl.ceil_px[col] / lvl.floor_px[col] = quantized corridor bounds in pixels
 local function build_tilemap(lvl)
   local cols = math.ceil(lvl.length / TILE)
@@ -196,8 +219,8 @@ local function build_tilemap(lvl)
     local ceil_rows = util.clamp(math.floor(ceiling / TILE + 0.5), 0, GRID_ROWS)
     local floor_row = util.clamp(math.floor(floor / TILE + 0.5), 0, GRID_ROWS)
     local column = {}
-    for row = 0, ceil_rows - 1 do column[row] = TILE_TREE end
-    for row = floor_row, GRID_ROWS - 1 do column[row] = TILE_STONE end
+    for row = 0, ceil_rows - 1 do column[row] = terrain_tile_at(col, row) end
+    for row = floor_row, GRID_ROWS - 1 do column[row] = terrain_tile_at(col, row) end
     lvl.map[col] = column
     lvl.ceil_px[col] = ceil_rows * TILE
     lvl.floor_px[col] = floor_row * TILE
@@ -275,6 +298,24 @@ end
 local function member_pos(i)
   local dx, dy = current_offset(i)
   return State.x + dx, State.y + dy * State.squeeze
+end
+
+-- Velocity for an aimed enemy shot fired from (cx, cy): point at a random living
+-- member's center, then rotate by a random angle up to `spread` radians — aim
+-- that's random but always in the squad's general direction. Avoids atan2 (Lua
+-- 5.5 vs LuaJIT differ) by normalizing the delta and rotating the vector. Falls
+-- back to straight-left if the squad is empty.
+local function aim_velocity(cx, cy, speed, spread)
+  local n = #State.team
+  if n == 0 then return -speed, 0 end
+  local mx, my = member_pos(math.random(n))
+  local dx, dy = (mx + MEMBER_SIZE / 2) - cx, (my + MEMBER_SIZE / 2) - cy
+  local len = math.sqrt(dx * dx + dy * dy)
+  if len == 0 then return -speed, 0 end
+  local ux, uy = dx / len, dy / len
+  local ang = (math.random() * 2 - 1) * (spread or 0.3)
+  local ca, sa = math.cos(ang), math.sin(ang)
+  return (ux * ca - uy * sa) * speed, (ux * sa + uy * ca) * speed
 end
 
 -- Leave the select screen and start the stage with the chosen squad. Resets all
@@ -497,11 +538,19 @@ local function update_play(dt)
           e.fire_cd = e.fire_rate
           local cx, cy = screen_x + e.w / 2, e.y + e.h / 2
           for _, shot in ipairs(e.shots) do
+            local vx, vy
+            if shot.aim then
+              -- Aimed shot: point at the squad (with random spread), speed only.
+              vx, vy = aim_velocity(cx, cy, shot.speed, shot.spread)
+            else
+              -- Fixed shot: authored velocity; ambush enemies fire mirrored.
+              vx, vy = shot.vx * -e.dir, shot.vy
+            end
             table.insert(State.ebullets, {
               x = cx - shot.w / 2,
               y = cy - shot.h / 2,
-              vx = shot.vx * -e.dir, -- ambush enemies fire in their facing dir
-              vy = shot.vy,
+              vx = vx,
+              vy = vy,
               w = shot.w,
               h = shot.h,
               color = shot.color,
@@ -631,10 +680,10 @@ local function update_play(dt)
 end
 
 local function draw_play(dt)
-  gfx.clear(gfx.COLOR_BLACK)
+  gfx.clear(GROUND_COLOR) -- open lane = ground (top-down); terrain draws over it
 
-  -- Terrain tilemap: stamp the visible columns' non-empty cells. Each tile draws
-  -- via draw_art, so a TILES entry with a `spr` shows art, otherwise a color.
+  -- Terrain tilemap: stamp the visible columns' solid cells over the ground. Each
+  -- tile draws via draw_art, so a TERRAIN_TILES entry with a `spr` shows art.
   local lvl = State.level
   local first_col = math.floor(State.scroll / TILE)
   local last_col = math.floor((State.scroll + 320) / TILE)
@@ -645,7 +694,7 @@ local function draw_play(dt)
       for row = 0, GRID_ROWS - 1 do
         local id = column[row]
         if id then
-          local t = TILES[id]
+          local t = TERRAIN_TILES[id]
           draw_art(t.spr, dx, row * TILE, TILE, TILE, t.color)
         end
       end
