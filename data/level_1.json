@@ -1,0 +1,33 @@
+{
+  "scroll_speed": 30,
+  "length": 3000,
+  "spawns": [
+    { "x": 360,  "type": "grunt",  "y": 40,  "move": "sine" },
+    { "x": 520,  "type": "grunt",  "y": 120, "move": "sine" },
+    { "x": 620,  "type": "gunner", "y": 70,  "move": "straight" },
+    { "x": 700,  "type": "turret", "anchor": "ceiling" },
+    { "x": 700,  "type": "turret", "anchor": "floor" },
+    { "x": 900,  "type": "wall",   "anchor": "ceiling", "h": 40 },
+    { "x": 1150, "type": "grunt",  "y": 80,  "move": "zigzag" },
+    { "x": 1300, "type": "grunt",  "y": 100, "move": "dive" },
+    { "x": 1450, "type": "grunt",  "y": 60,  "move": "charge" },
+    { "x": 1550, "type": "grunt",  "y": 90,  "move": "straight", "ambush": true },
+    { "x": 1700, "type": "wall",   "anchor": "floor", "h": 40 },
+    { "x": 2000, "type": "turret", "anchor": "ceiling" },
+    { "x": 2050, "type": "gunner", "y": 100, "move": "sine" },
+    { "x": 2100, "type": "grunt",  "y": 90,  "move": "sine" },
+    { "x": 2200, "type": "gunner", "y": 70,  "move": "straight", "ambush": true },
+    { "x": 2300, "type": "grunt",  "y": 50,  "move": "sine" }
+  ],
+  "terrain": [
+    { "x": 0,    "ceiling": 30, "floor": 150 },
+    { "x": 600,  "ceiling": 30, "floor": 150 },
+    { "x": 900,  "ceiling": 45, "floor": 169 },
+    { "x": 1100, "ceiling": 45, "floor": 120 },
+    { "x": 1400, "ceiling": 20, "floor": 150 },
+    { "x": 1700, "ceiling": 70, "floor": 150 },
+    { "x": 1900, "ceiling": 70, "floor": 110 },
+    { "x": 2200, "ceiling": 20, "floor": 160 },
+    { "x": 3000, "ceiling": 10, "floor": 169 }
+  ]
+}
